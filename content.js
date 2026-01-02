@@ -198,16 +198,14 @@
   function isCaptchaPage(html) {
     const captchaIndicators = [
       'gs_captcha',
-      'captcha',
-      'unusual traffic',
-      'automated requests',
-      'robot',
       'recaptcha',
       'g-recaptcha',
+      '/sorry/index',
+      'unusual traffic',
+      'automated requests',
       'please show you\'re not a robot',
       'verify you are a human',
-      'sorry, we can\'t verify',
-      '/sorry/index'
+      'sorry, we can\'t verify'
     ];
     
     const lowerHtml = html.toLowerCase();
