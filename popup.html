@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scholar Reference Exporter</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      width: 320px;
+      background: #fff;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #4285f4, #3367d6);
+      color: #fff;
+      padding: 16px;
+    }
+    
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    
+    .header p {
+      font-size: 12px;
+      opacity: 0.9;
+    }
+    
+    .content {
+      padding: 16px;
+    }
+    
+    .section {
+      margin-bottom: 20px;
+    }
+    
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .setting-row:last-child {
+      border-bottom: none;
+    }
+    
+    .setting-label {
+      font-size: 14px;
+      color: #333;
+    }
+    
+    .setting-description {
+      font-size: 12px;
+      color: #666;
+      margin-top: 2px;
+    }
+    
+    /* Toggle Switch */
+    .toggle {
+      position: relative;
+      width: 44px;
+      height: 24px;
+    }
+    
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: 0.3s;
+      border-radius: 24px;
+    }
+    
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.3s;
+      border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    
+    .toggle input:checked + .toggle-slider {
+      background-color: #4285f4;
+    }
+    
+    .toggle input:checked + .toggle-slider:before {
+      transform: translateX(20px);
+    }
+    
+    /* Number Input */
+    .number-input {
+      width: 80px;
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      text-align: right;
+    }
+    
+    .number-input:focus {
+      outline: none;
+      border-color: #4285f4;
+    }
+    
+    /* Status */
+    .status {
+      padding: 12px;
+      background: #f8f9fa;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+    
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+    }
+    
+    .status-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #34a853;
+    }
+    
+    .status-indicator.inactive {
+      background: #ea4335;
+    }
+    
+    /* Footer */
+    .footer {
+      padding: 12px 16px;
+      background: #f8f9fa;
+      border-top: 1px solid #eee;
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+    }
+    
+    .footer a {
+      color: #4285f4;
+      text-decoration: none;
+    }
+    
+    .footer a:hover {
+      text-decoration: underline;
+    }
+    
+    /* Save Button */
+    .save-btn {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #4285f4, #3367d6);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .save-btn:hover {
+      background: linear-gradient(135deg, #3367d6, #2851a3);
+    }
+    
+    .save-btn:active {
+      transform: scale(0.98);
+    }
+    
+    .save-btn.saved {
+      background: #34a853;
+    }
+    
+    /* Instructions */
+    .instructions {
+      background: #e8f0fe;
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .instructions h3 {
+      font-size: 13px;
+      color: #1967d2;
+      margin-bottom: 8px;
+    }
+    
+    .instructions ol {
+      font-size: 12px;
+      color: #333;
+      padding-left: 18px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📚 Scholar Reference Exporter</h1>
+    <p>Export citing papers from Google Scholar</p>
+  </div>
+  
+  <div class="content">
+    <div class="status">
+      <div class="status-row">
+        <span class="status-indicator" id="status-indicator"></span>
+        <span id="status-text">Ready to use on Google Scholar</span>
+      </div>
+    </div>
+    
+    <div class="instructions">
+      <h3>How to Use</h3>
+      <ol>
+        <li>Go to Google Scholar and search for papers</li>
+        <li>Hover over any paper title</li>
+        <li>Click "Export All References" button</li>
+        <li>Wait for the export to complete</li>
+      </ol>
+    </div>
+    
+    <div class="section">
+      <div class="section-title">Settings</div>
+      
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Max References</div>
+          <div class="setting-description">Maximum papers to export</div>
+        </div>
+        <input type="number" class="number-input" id="maxReferences" min="10" max="5000" step="10" value="1000">
+      </div>
+      
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Semantic Scholar</div>
+          <div class="setting-description">Enrich metadata with API</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="enableSemanticScholar" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Auto Sort</div>
+          <div class="setting-description">Sort by year (newest first)</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="autoSort" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+    
+    <button class="save-btn" id="saveBtn">Save Settings</button>
+  </div>
+  
+  <div class="footer">
+    <p>Version 1.0.0 • <a href="https://github.com" target="_blank">GitHub</a></p>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+{
+  "manifest_version": 3,
+  "name": "Scholar Reference Exporter",
+  "version": "1.0.0",
+  "description": "Export all citing papers from Google Scholar with enriched metadata from Semantic Scholar",
+  "permissions": [
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://scholar.google.com/*",
+    "https://scholar.google.ca/*",
+    "https://scholar.google.co.uk/*",
+    "https://scholar.google.de/*",
+    "https://scholar.google.fr/*",
+    "https://scholar.google.co.jp/*",
+    "https://scholar.google.com.hk/*",
+    "https://scholar.google.com.tw/*",
+    "https://scholar.google.com.au/*",
+    "https://api.semanticscholar.org/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://scholar.google.com/*",
+        "https://scholar.google.ca/*",
+        "https://scholar.google.co.uk/*",
+        "https://scholar.google.de/*",
+        "https://scholar.google.fr/*",
+        "https://scholar.google.co.jp/*",
+        "https://scholar.google.com.hk/*",
+        "https://scholar.google.com.tw/*",
+        "https://scholar.google.com.au/*"
+      ],
+      "js": ["utils.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}
