@@ -1127,9 +1127,12 @@
     const csvContent = toCSV(citations, columns);
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
-    
-    const filename = `references_${sanitizeFilename(paperTitle)}_${new Date().toISOString().split('T')[0]}.csv`;
-    
+
+    // Filename format: PaperName_N_citations_YYYY-MM-DD.csv
+    const citationCount = citations.length;
+    const dateStr = new Date().toISOString().split('T')[0];
+    const filename = `${sanitizeFilename(paperTitle)}_${citationCount}_citations_${dateStr}.csv`;
+
     // Use downloads API via background script
     chrome.runtime.sendMessage({
       action: 'download',
