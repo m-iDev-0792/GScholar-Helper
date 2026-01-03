@@ -127,6 +127,10 @@
             <span id="sre-progress-details"></span>
           </div>
           <div class="sre-progress-stage" id="sre-progress-stage"></div>
+          <div class="sre-debug-log-container">
+            <div class="sre-debug-log-header">Debug Log</div>
+            <div class="sre-debug-log" id="sre-debug-log"></div>
+          </div>
         </div>
         <div class="sre-modal-footer">
           <button class="sre-btn sre-btn-secondary" id="sre-stop-export-btn">Stop & Export Now</button>
@@ -174,6 +178,29 @@
     if (progressStage) progressStage.textContent = stage;
     if (progressPages) progressPages.textContent = pageInfo;
     if (progressRetries) progressRetries.textContent = retryInfo;
+  }
+
+  // Add debug log message to progress modal
+  function addDebugLog(message, type = 'info') {
+    const debugLog = document.getElementById('sre-debug-log');
+    if (!debugLog) return;
+
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = document.createElement('div');
+    logEntry.className = `sre-log-entry sre-log-${type}`;
+    logEntry.textContent = `[${timestamp}] ${message}`;
+
+    debugLog.appendChild(logEntry);
+    // Auto-scroll to bottom
+    debugLog.scrollTop = debugLog.scrollHeight;
+  }
+
+  // Clear debug log
+  function clearDebugLog() {
+    const debugLog = document.getElementById('sre-debug-log');
+    if (debugLog) {
+      debugLog.innerHTML = '';
+    }
   }
 
   // Close progress modal
@@ -819,6 +846,11 @@
     addCitationsWithDedup(initialCitations, seenCitationKeys, allCitations, targetTotal);
     pageState.count++;
 
+    const yearStopLimit = paperYear || 1900;
+
+    addDebugLog(`First page: Found ${initialCitations.length} papers, year range ${minYear}-${maxYear}`);
+    addDebugLog(`Starting year-by-year extraction from ${maxYear} to ${yearStopLimit}`);
+
     if (allCitations.length >= targetTotal || task.stopRequested) {
       return allCitations;
     }
@@ -829,7 +861,6 @@
     let currentYear = maxYear;
     let oldestYearSeen = minYear;
     let consecutiveEmptyYears = 0;
-    const yearStopLimit = paperYear || 1900;
 
     while (!task.cancelled && !task.stopRequested && allCitations.length < targetTotal && currentYear >= yearStopLimit) {
       const { yearHadResults } = await fetchCitationsForYear({
@@ -872,7 +903,9 @@
         await waitBetweenPages(pageState.count);
       }
     }
-    
+
+    addDebugLog(`Finished collecting from Google Scholar: ${allCitations.length} unique citations`, 'success');
+
     return allCitations;
   }
 
@@ -935,6 +968,7 @@
         if (pageInYear === 1) {
           // First page of the year has no results - this is normal, skip this year
           log(`Year ${year}: No papers found, skipping year`);
+          addDebugLog(`Year ${year}: No papers found, skipping year`, 'warn');
           updateProgress(
             `Year ${year}: No papers found`,
             progressPercent,
@@ -947,6 +981,7 @@
         } else {
           // Subsequent page has no results - possible rate limiting
           logError(`Year ${year} page ${pageInYear}: No papers returned (possible rate limiting)`);
+          addDebugLog(`Year ${year} page ${pageInYear}: No papers (rate limit?)`, 'error');
           updateProgress(
             `Year ${year}: No papers on page ${pageInYear}`,
             progressPercent,
@@ -961,7 +996,15 @@
       }
 
       yearHadResults = true;
+      const beforeCount = allCitations.length;
       added += addCitationsWithDedup(pageCitations, seenCitationKeys, allCitations, targetTotal);
+      const afterCount = allCitations.length;
+      const duplicates = pageCitations.length - (afterCount - beforeCount);
+
+      addDebugLog(`Year ${year} page ${pageInYear}: Found ${pageCitations.length} papers, added ${afterCount - beforeCount} (${duplicates} duplicates)`);
+      if (duplicates > 0) {
+        addDebugLog(`  Total unique citations so far: ${afterCount}`, 'info');
+      }
 
       if (allCitations.length >= targetTotal) {
         return { added, yearHadResults };
@@ -1236,8 +1279,18 @@
     };
 
     createProgressModal();
-    
+
     try {
+      // Add initial debug logs
+      addDebugLog(`Starting export for: "${paperTitle}"`);
+      if (expectedTotal) {
+        addDebugLog(`Google Scholar reports ${expectedTotal} total citations`);
+      }
+      if (paperYear) {
+        addDebugLog(`Paper published in ${paperYear}, will fetch citations from ${paperYear} onwards`);
+      }
+      addDebugLog(`Using delay: ${CONFIG.minDelaySeconds}-${CONFIG.maxDelaySeconds}s between pages`);
+
       // Stage 1: Fetch all citations from Google Scholar
       updateProgress(
         'Collecting citations from Google Scholar...',
@@ -1282,11 +1335,18 @@
       // Stage 3: Sort and export
       const exportMessage = currentExportTask.stopRequested ? 'Exporting partial results...' : 'Sorting and generating CSV...';
       updateProgress(exportMessage, 90, '', 'Stage 3/3: Generating Export');
+
+      addDebugLog(`Preparing CSV export with ${citations.length} citations`);
       const finalCitations = CONFIG.autoSort ? sortByYear(citations) : citations;
       const filename = downloadCSV(finalCitations, paperTitle);
-      
+
+      addDebugLog(`✓ Export complete: ${filename}`, 'success');
+      if (expectedTotal && finalCitations.length < expectedTotal) {
+        addDebugLog(`Note: Exported ${finalCitations.length} of ${expectedTotal} expected (${expectedTotal - finalCitations.length} missing due to deduplication or filtering)`, 'warn');
+      }
+
       updateProgress('Complete!', 100, '', 'Done');
-      
+
       // Show success
       setTimeout(() => {
         showCompletionModal(finalCitations.length, filename);
