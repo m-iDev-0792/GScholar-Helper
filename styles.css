@@ -92,6 +92,10 @@
   animation: sre-modalSlideIn 0.25s ease-out;
 }
 
+.sre-modal-wide {
+  max-width: 640px;
+}
+
 @keyframes sre-modalSlideIn {
   from {
     opacity: 0;

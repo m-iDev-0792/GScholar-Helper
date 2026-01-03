@@ -213,16 +213,25 @@
     currentExportTask = null;
   }
 
+  // Get debug log HTML content
+  function getDebugLogContent() {
+    const debugLog = document.getElementById('sre-debug-log');
+    return debugLog ? debugLog.innerHTML : '';
+  }
+
   // Show completion modal
   function showCompletionModal(count, filename) {
+    // Capture debug log before closing progress modal
+    const debugLogContent = getDebugLogContent();
+
     closeProgressModal();
-    
+
     const overlay = document.createElement('div');
     overlay.className = 'sre-modal-overlay';
     overlay.id = 'sre-completion-modal';
-    
+
     overlay.innerHTML = `
-      <div class="sre-modal sre-modal-success">
+      <div class="sre-modal sre-modal-success sre-modal-wide">
         <div class="sre-modal-header">
           <h3>✓ Export Complete</h3>
           <button class="sre-modal-close" id="sre-close-completion">✕</button>
@@ -230,20 +239,26 @@
         <div class="sre-modal-body">
           <p>Successfully exported <strong>${count}</strong> references.</p>
           <p class="sre-filename">File: ${filename}</p>
+          ${debugLogContent ? `
+            <div class="sre-debug-log-container" style="margin-top: 16px;">
+              <div class="sre-debug-log-header">Extraction Log</div>
+              <div class="sre-debug-log">${debugLogContent}</div>
+            </div>
+          ` : ''}
         </div>
         <div class="sre-modal-footer">
           <button class="sre-btn sre-btn-primary" id="sre-close-completion-btn">Close</button>
         </div>
       </div>
     `;
-    
+
     document.body.appendChild(overlay);
-    
+
     const closeBtn = document.getElementById('sre-close-completion');
     const closeCompletionBtn = document.getElementById('sre-close-completion-btn');
-    
+
     const handleClose = () => overlay.remove();
-    
+
     closeBtn.addEventListener('click', handleClose);
     closeCompletionBtn.addEventListener('click', handleClose);
     overlay.addEventListener('click', (e) => {
