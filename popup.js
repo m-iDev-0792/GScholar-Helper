@@ -10,9 +10,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     maxDelaySeconds: 8,
     cooldownSeconds: 15,
     enableSemanticScholar: true,
-    autoSort: true
+    autoSort: true,
+    exportDebugData: false
   });
-  
+
   // Apply settings to UI
   document.getElementById('maxReferences').value = settings.maxReferences;
   document.getElementById('minDelaySeconds').value = settings.minDelaySeconds;
@@ -20,6 +21,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('cooldownSeconds').value = settings.cooldownSeconds;
   document.getElementById('enableSemanticScholar').checked = settings.enableSemanticScholar;
   document.getElementById('autoSort').checked = settings.autoSort;
+  document.getElementById('exportDebugData').checked = settings.exportDebugData;
   
   // Check if on Google Scholar
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -46,7 +48,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       maxDelaySeconds: parseInt(document.getElementById('maxDelaySeconds').value, 10),
       cooldownSeconds: parseInt(document.getElementById('cooldownSeconds').value, 10),
       enableSemanticScholar: document.getElementById('enableSemanticScholar').checked,
-      autoSort: document.getElementById('autoSort').checked
+      autoSort: document.getElementById('autoSort').checked,
+      exportDebugData: document.getElementById('exportDebugData').checked
     };
     
     // Validate

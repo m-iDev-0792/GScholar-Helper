@@ -26,7 +26,8 @@
     maxDelaySeconds: 8,
     cooldownSeconds: 15,
     enableSemanticScholar: true,
-    autoSort: true
+    autoSort: true,
+    exportDebugData: false
   };
 
   let CONFIG = { ...BASE_CONFIG, ...DEFAULT_SETTINGS };
@@ -274,8 +275,9 @@
     overlay.className = 'sre-modal-overlay';
     overlay.id = 'sre-error-modal';
 
-    // Show debug button if there are failures
-    const debugButtonHtml = debugInfo.hasFailures
+    // Show debug button only if debug export is enabled AND there are failures
+    const showDebugButton = CONFIG.exportDebugData && debugInfo.hasFailures;
+    const debugButtonHtml = showDebugButton
       ? `<button class="sre-btn sre-btn-debug" id="sre-error-debug-btn">Export Debug Data (${debugInfo.failedResponses.length} failures)</button>`
       : '';
 
@@ -287,7 +289,7 @@
         </div>
         <div class="sre-modal-body">
           <p>${message}</p>
-          ${debugInfo.hasFailures ? '<p style="margin-top: 12px; font-size: 13px; color: #f59e0b;">Debug data is available. Click the button below to export the failed responses for analysis.</p>' : ''}
+          ${showDebugButton ? '<p style="margin-top: 12px; font-size: 13px; color: #f59e0b;">Debug data is available. Click the button below to export the failed responses for analysis.</p>' : ''}
         </div>
         <div class="sre-modal-footer">
           ${debugButtonHtml}
@@ -935,16 +937,18 @@
       }
 
       if (pageCitations.length === 0) {
-        // Capture failed response for debugging
-        debugInfo.failedResponses.push({
-          timestamp: new Date().toISOString(),
-          year: year,
-          page: pageInYear,
-          url: pageUrl,
-          html: html,
-          reason: pageInYear === 1 ? 'No results for year' : 'Possible rate limiting'
-        });
-        debugInfo.hasFailures = true;
+        // Capture failed response for debugging (only if enabled)
+        if (CONFIG.exportDebugData) {
+          debugInfo.failedResponses.push({
+            timestamp: new Date().toISOString(),
+            year: year,
+            page: pageInYear,
+            url: pageUrl,
+            html: html,
+            reason: pageInYear === 1 ? 'No results for year' : 'Possible rate limiting'
+          });
+          debugInfo.hasFailures = true;
+        }
 
         // No papers found for this year/page
         if (pageInYear === 1) {
