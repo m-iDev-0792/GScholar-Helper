@@ -832,7 +832,11 @@
     let oldestYearSeen = maxYear;
     let consecutiveEmptyYears = 0;
 
+    const totalYears = maxYear - minYear + 1;
+    let yearsProcessed = 0;
+
     while (!task.cancelled && !task.stopRequested && allCitations.length < targetTotal && processingYear >= yearStopLimit) {
+      yearsProcessed++;
       const { yearHadResults } = await fetchCitationsForYear({
         year: processingYear,
         baseUrl: citedByUrl,
@@ -840,7 +844,8 @@
         targetTotal,
         seenCitationKeys,
         allCitations,
-        totalPagesEstimate,
+        totalYears,
+        yearsProcessed,
         pageState
       });
 
@@ -848,12 +853,13 @@
         consecutiveEmptyYears++;
         if (consecutiveEmptyYears >= 3 && processingYear < oldestYearSeen - 1) {
           log(`No results for ${consecutiveEmptyYears} consecutive years; stopping early at year ${processingYear}`);
+          const currentProgress = Math.min(35, (yearsProcessed / totalYears) * 35);
           updateProgress(
             `Stopping early - ${consecutiveEmptyYears} consecutive empty years`,
-            Math.min(35, pageState.count * 2),
-            `Collected ${allCitations.length} references total`,
+            currentProgress,
+            `Collected ${allCitations.length} unique references total`,
             'Stage 1/3: Collecting from Google Scholar',
-            `Stopped at year ${processingYear}`,
+            `Year ${yearsProcessed}/${totalYears} (stopped at ${processingYear})`,
             ''
           );
           break;
@@ -886,7 +892,8 @@
     targetTotal,
     seenCitationKeys,
     allCitations,
-    totalPagesEstimate,
+    totalYears,
+    yearsProcessed,
     pageState
   }) {
     let start = 0;
@@ -899,14 +906,15 @@
       pageInYear++;
       pageState.count++;
       const pageLabel = `Year ${year} • Page ${pageInYear}`;
-      const progressPercent = Math.min(35, pageState.count * 2);
+      const progressPercent = Math.min(35, (yearsProcessed / totalYears) * 35);
+      const yearProgress = `Year ${yearsProcessed}/${totalYears} (${year})`;
 
       updateProgress(
         `Fetching ${pageLabel}...`,
         progressPercent,
-        `Collected ${allCitations.length} references`,
+        `Collected ${allCitations.length} unique references`,
         'Stage 1/3: Collecting from Google Scholar',
-        totalPagesEstimate ? `Page ${pageState.count}/${totalPagesEstimate}` : pageLabel,
+        yearProgress,
         retryCounter ? `Retries: ${retryCounter}` : ''
       );
 
@@ -946,9 +954,9 @@
           updateProgress(
             `Year ${year}: No papers found`,
             progressPercent,
-            `Collected ${allCitations.length} references (skipping year ${year})`,
+            `Collected ${allCitations.length} unique references (skipping year ${year})`,
             'Stage 1/3: Collecting from Google Scholar',
-            `Year ${year} - No results`,
+            yearProgress,
             retryCounter ? `Retries: ${retryCounter}` : ''
           );
           return { added, yearHadResults: false };
@@ -959,9 +967,9 @@
           updateProgress(
             `Year ${year}: No papers on page ${pageInYear}`,
             progressPercent,
-            `Possible rate limiting detected - collected ${allCitations.length} references so far`,
+            `Possible rate limiting - collected ${allCitations.length} unique references so far`,
             'Stage 1/3: Collecting from Google Scholar',
-            `Year ${year} - Page ${pageInYear} blocked`,
+            yearProgress,
             retryCounter ? `Retries: ${retryCounter}` : ''
           );
           // Stop pagination for this year but don't crash
@@ -979,6 +987,16 @@
       if (duplicates > 0) {
         addDebugLog(`  Total unique citations so far: ${afterCount}`, 'info');
       }
+
+      // Update progress with current citation count immediately after adding
+      updateProgress(
+        `Processing ${pageLabel}...`,
+        progressPercent,
+        `Collected ${afterCount} unique references`,
+        'Stage 1/3: Collecting from Google Scholar',
+        yearProgress,
+        retryCounter ? `Retries: ${retryCounter}` : ''
+      );
 
       if (allCitations.length >= targetTotal) {
         return { added, yearHadResults };
@@ -1000,9 +1018,9 @@
         updateProgress(
           `Waiting ${formatDelaySeconds(delayMs)}s before next page...`,
           progressPercent,
-          `Rate limiting pause`,
+          `Collected ${allCitations.length} unique references`,
           'Stage 1/3: Collecting from Google Scholar',
-          pageLabel,
+          yearProgress,
           retryCounter ? `Retries: ${retryCounter}` : ''
         );
       } else {
