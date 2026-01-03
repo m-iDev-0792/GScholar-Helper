@@ -68,6 +68,9 @@ chrome.runtime.onInstalled.addListener((details) => {
     // Set default settings
     chrome.storage.sync.set({
       maxReferences: 1000,
+      minDelaySeconds: 3,
+      maxDelaySeconds: 8,
+      cooldownSeconds: 15,
       enableSemanticScholar: true,
       autoSort: true
     });

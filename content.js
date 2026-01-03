@@ -7,21 +7,71 @@
   'use strict';
 
   // Configuration
-  const CONFIG = {
-    maxReferences: 1000,
-    minDelay: 1500,
-    maxDelay: 4000,
+  const BASE_CONFIG = {
     semanticScholarBatchSize: 10,
     semanticScholarDelay: 200,
     similarityThreshold: 0.6,
     captchaCheckInterval: 2000,
-    captchaTimeout: 300000 // 5 minutes max wait for captcha
+    captchaTimeout: 300000, // 5 minutes max wait for captcha
+    cooldownPages: 5,
+    resultsPerPage: 20,
+    backoffScheduleMs: [10000, 30000],
+    backoffLongDelayRangeMs: { min: 120000, max: 300000 },
+    maxAutoRetries: 3
   };
+
+  const DEFAULT_SETTINGS = {
+    maxReferences: 1000,
+    minDelaySeconds: 3,
+    maxDelaySeconds: 8,
+    cooldownSeconds: 15,
+    enableSemanticScholar: true,
+    autoSort: true
+  };
+
+  let CONFIG = { ...BASE_CONFIG, ...DEFAULT_SETTINGS };
+  const settingsReady = loadSettings();
 
   // State management
   let currentExportTask = null;
   let isExporting = false;
   let captchaWindow = null;
+  let retryCounter = 0;
+
+  // ==================== Settings Management ====================
+
+  function normalizeSettings() {
+    if (CONFIG.minDelaySeconds < 1) CONFIG.minDelaySeconds = 1;
+    if (CONFIG.maxDelaySeconds < CONFIG.minDelaySeconds) {
+      CONFIG.maxDelaySeconds = CONFIG.minDelaySeconds;
+    }
+    if (!CONFIG.cooldownPages || CONFIG.cooldownPages < 1) {
+      CONFIG.cooldownPages = BASE_CONFIG.cooldownPages;
+    }
+    
+    CONFIG.minDelayMs = CONFIG.minDelaySeconds * 1000;
+    CONFIG.maxDelayMs = CONFIG.maxDelaySeconds * 1000;
+    CONFIG.cooldownMs = CONFIG.cooldownSeconds * 1000;
+  }
+
+  async function loadSettings() {
+    try {
+      const saved = await chrome.storage.sync.get(DEFAULT_SETTINGS);
+      CONFIG = { ...BASE_CONFIG, ...DEFAULT_SETTINGS, ...saved };
+      normalizeSettings();
+    } catch (e) {
+      logError('Failed to load settings, using defaults', e);
+      CONFIG = { ...BASE_CONFIG, ...DEFAULT_SETTINGS };
+      normalizeSettings();
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.action === 'settingsUpdated' && message.settings) {
+      CONFIG = { ...CONFIG, ...message.settings };
+      normalizeSettings();
+    }
+  });
 
   // ==================== UI Components ====================
 
@@ -67,13 +117,15 @@
           <div class="sre-progress-bar-container">
             <div class="sre-progress-bar" id="sre-progress-bar"></div>
           </div>
+          <div class="sre-progress-pages" id="sre-progress-pages"></div>
+          <div class="sre-progress-retries" id="sre-progress-retries"></div>
           <div class="sre-progress-details">
             <span id="sre-progress-details"></span>
           </div>
           <div class="sre-progress-stage" id="sre-progress-stage"></div>
         </div>
         <div class="sre-modal-footer">
-          <button class="sre-btn sre-btn-secondary" id="sre-cancel-export-btn">Cancel</button>
+          <button class="sre-btn sre-btn-secondary" id="sre-stop-export-btn">Stop & Export Now</button>
         </div>
       </div>
     `;
@@ -82,7 +134,7 @@
     
     // Setup cancel handlers
     const cancelBtn = document.getElementById('sre-cancel-btn');
-    const cancelExportBtn = document.getElementById('sre-cancel-export-btn');
+    const stopExportBtn = document.getElementById('sre-stop-export-btn');
     
     const handleCancel = () => {
       if (currentExportTask) {
@@ -92,22 +144,32 @@
     };
     
     cancelBtn.addEventListener('click', handleCancel);
-    cancelExportBtn.addEventListener('click', handleCancel);
+    stopExportBtn.addEventListener('click', () => {
+      if (currentExportTask) {
+        currentExportTask.stopRequested = true;
+      }
+      stopExportBtn.disabled = true;
+      stopExportBtn.textContent = 'Stopping...';
+    });
     
     return overlay;
   }
 
   // Update progress modal
-  function updateProgress(text, percent, details = '', stage = '') {
+  function updateProgress(text, percent, details = '', stage = '', pageInfo = '', retryInfo = '') {
     const progressText = document.getElementById('sre-progress-text');
     const progressBar = document.getElementById('sre-progress-bar');
     const progressDetails = document.getElementById('sre-progress-details');
     const progressStage = document.getElementById('sre-progress-stage');
+    const progressPages = document.getElementById('sre-progress-pages');
+    const progressRetries = document.getElementById('sre-progress-retries');
     
     if (progressText) progressText.textContent = text;
     if (progressBar) progressBar.style.width = `${percent}%`;
     if (progressDetails) progressDetails.textContent = details;
     if (progressStage) progressStage.textContent = stage;
+    if (progressPages) progressPages.textContent = pageInfo;
+    if (progressRetries) progressRetries.textContent = retryInfo;
   }
 
   // Close progress modal
@@ -362,12 +424,18 @@
   // ==================== Scholar Parsing ====================
 
   // Find the "Cited by N" link in a paper entry
+  // Extract cited-by link and count
   function findCitedByLink(paperEntry) {
     const links = paperEntry.querySelectorAll('.gs_fl a, .gs_fl2 a');
     for (const link of links) {
       const text = link.textContent.trim();
-      if (text.match(/^Cited by \d+/i)) {
-        return link.href;
+      const lowerText = text.toLowerCase();
+      if (lowerText.match(/^cited by \d+/) || lowerText.includes('被引用')) {
+        const countMatch = text.match(/(\d+)/);
+        return {
+          href: link.href,
+          count: countMatch ? parseInt(countMatch[1], 10) : null
+        };
       }
     }
     return null;
@@ -545,105 +613,303 @@
 
   // ==================== Data Fetching ====================
 
-  // Fetch all citations from Google Scholar (with pagination)
-  async function fetchAllCitations(citedByUrl, task) {
-    const allCitations = [];
-    let currentUrl = citedByUrl;
-    let pageNum = 1;
-    let retryCount = 0;
-    const maxRetries = 3;
-    const seenCitationKeys = new Set();
-    
-    while (currentUrl && !task.cancelled) {
-      // Check max limit
-      if (allCitations.length >= CONFIG.maxReferences) {
-        log(`Reached max reference limit (${CONFIG.maxReferences})`);
-        break;
-      }
-      
-      updateProgress(
-        `Fetching page ${pageNum}...`,
-        Math.min(30, pageNum * 3),
-        `Found ${allCitations.length} references so far`,
-        'Stage 1/3: Collecting from Google Scholar'
-      );
-      
+  function buildScholarUrl(baseUrl, params = {}) {
+    const url = new URL(baseUrl);
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === null || value === undefined) return;
+      url.searchParams.set(key, value);
+    });
+
+    // Force 20 results per page and sort by year (newest first)
+    url.searchParams.set('num', CONFIG.resultsPerPage);
+    url.searchParams.set('scisbd', 1);
+
+    return url.toString();
+  }
+
+  function getBackoffDelayMs(failureIndex) {
+    if (failureIndex < CONFIG.backoffScheduleMs.length) {
+      return CONFIG.backoffScheduleMs[failureIndex];
+    }
+    const range = CONFIG.backoffLongDelayRangeMs;
+    const min = Math.max(range.min, 0);
+    const max = Math.max(range.max, min);
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  function formatDelaySeconds(ms) {
+    return Math.round(ms / 1000);
+  }
+
+  function computePageDelayMs(pageFetchCount) {
+    const randomDelay = Math.floor(Math.random() * (CONFIG.maxDelayMs - CONFIG.minDelayMs + 1)) + CONFIG.minDelayMs;
+    if (pageFetchCount > 0 && pageFetchCount % CONFIG.cooldownPages === 0) {
+      return Math.max(CONFIG.cooldownMs, randomDelay);
+    }
+    return randomDelay;
+  }
+
+  async function waitBetweenPages(pageFetchCount) {
+    const delayMs = computePageDelayMs(pageFetchCount);
+    await sleep(delayMs);
+    return delayMs;
+  }
+
+  async function fetchScholarPage(url, task, progressContext = {}) {
+    let failureCount = 0;
+    while (!task.cancelled) {
       try {
-        const response = await fetch(currentUrl, {
+        const response = await fetch(url, {
           credentials: 'include',
           headers: {
-            'Accept': 'text/html',
+            'Accept': 'text/html'
           }
         });
-        
+
         if (!response.ok) {
           if (response.status === 429) {
-            logError('Rate limited by Google Scholar (HTTP 429)');
-            // Try to handle with CAPTCHA flow
-            if (retryCount < maxRetries) {
-              retryCount++;
-              await handleCaptcha(currentUrl);
-              continue; // Retry the same page
-            }
-            throw new Error('Rate limited by Google Scholar. Please wait a few minutes and try again.');
+            throw new Error('Rate limited (HTTP 429)');
           }
           throw new Error(`Failed to fetch page: ${response.status}`);
         }
-        
+
         const html = await response.text();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        
-        // Check for CAPTCHA
         if (isCaptchaPage(html)) {
-          log('CAPTCHA page detected');
-          if (retryCount < maxRetries) {
-            retryCount++;
-            await handleCaptcha(currentUrl);
-            continue; // Retry the same page after CAPTCHA
-          }
-          throw new Error('Unable to bypass CAPTCHA. Please try again later.');
+          await handleCaptcha(url);
+          throw new Error('CAPTCHA detected');
         }
-        
-        // Reset retry count on successful page
-        retryCount = 0;
-        
-        // Parse citations from this page
-        const pageCitations = parseCitationsFromPage(doc);
-        log(`Page ${pageNum}: found ${pageCitations.length} citations`);
-        
-        if (pageCitations.length === 0) {
-          // No more results
+
+        retryCounter = 0;
+        return html;
+      } catch (e) {
+        failureCount++;
+        retryCounter = failureCount;
+
+        if (task.cancelled) {
+          throw e;
+        }
+
+        let continueRetry = true;
+        if (failureCount >= CONFIG.maxAutoRetries) {
+          continueRetry = window.confirm(`Attempt ${failureCount} failed: ${e.message}. Continue retrying?`);
+        }
+        if (!continueRetry) {
+          throw e;
+        }
+
+        const delayMs = getBackoffDelayMs(failureCount - 1);
+        const retryInfo = `Retries: ${failureCount} (waiting ${formatDelaySeconds(delayMs)}s)`;
+        updateProgress(
+          progressContext.text || 'Retrying request...',
+          progressContext.percent || 0,
+          progressContext.details || e.message || 'Request failed',
+          progressContext.stage || 'Retrying',
+          progressContext.pageInfo || '',
+          retryInfo
+        );
+
+        await sleep(delayMs);
+      }
+    }
+
+    throw new Error('Export cancelled');
+  }
+
+  function addCitationsWithDedup(citations, seenCitationKeys, targetList, targetTotal) {
+    let added = 0;
+    for (const citation of citations) {
+      const keys = buildDedupKeys(citation);
+      const isDuplicate = keys.some(key => seenCitationKeys.has(key));
+      if (isDuplicate) continue;
+      keys.forEach(key => seenCitationKeys.add(key));
+      targetList.push(citation);
+      added++;
+      if (targetList.length >= targetTotal) break;
+    }
+    return added;
+  }
+
+  function deriveYearBounds(citations) {
+    const years = citations
+      .map(c => c.year)
+      .filter(y => typeof y === 'number' && !Number.isNaN(y));
+    if (years.length === 0) {
+      const now = new Date().getFullYear();
+      return { minYear: now - 1, maxYear: now };
+    }
+    return {
+      minYear: Math.min(...years),
+      maxYear: Math.max(...years)
+    };
+  }
+
+  function getPaperYearFromEntry(paperEntry) {
+    const metaEl = paperEntry.querySelector('.gs_a');
+    if (!metaEl) return null;
+    return extractYear(metaEl.textContent);
+  }
+
+  // Fetch all citations from Google Scholar (year by year, paginated)
+  async function fetchAllCitations(citedByUrl, task, expectedTotal, paperYear) {
+    const allCitations = [];
+    const seenCitationKeys = new Set();
+    const targetTotal = expectedTotal ? Math.min(expectedTotal, CONFIG.maxReferences) : CONFIG.maxReferences;
+    const totalPagesEstimate = expectedTotal ? Math.max(1, Math.ceil(expectedTotal / CONFIG.resultsPerPage)) : null;
+    const pageState = { count: 0 };
+
+    // Initial page (unfiltered) to detect year range quickly
+    const firstUrl = buildScholarUrl(citedByUrl, { start: 0 });
+    const firstPageLabel = totalPagesEstimate ? `Page 1/${totalPagesEstimate}` : 'Page 1';
+    updateProgress(
+      'Fetching first page...',
+      5,
+      expectedTotal ? `Target: ${targetTotal} citations` : '',
+      'Stage 1/3: Collecting from Google Scholar',
+      firstPageLabel,
+      retryCounter ? `Retries: ${retryCounter}` : ''
+    );
+
+    const firstHtml = await fetchScholarPage(firstUrl, task, {
+      text: 'Retrying first page...',
+      percent: 5,
+      stage: 'Stage 1/3: Collecting from Google Scholar',
+      pageInfo: firstPageLabel
+    });
+    const firstDoc = new DOMParser().parseFromString(firstHtml, 'text/html');
+    const initialCitations = parseCitationsFromPage(firstDoc);
+    if (initialCitations.length === 0) {
+      throw new Error('未能从第一页获取任何论文，可能被限流或页面结构变化。');
+    }
+    const yearBounds = deriveYearBounds(initialCitations);
+    if (paperYear) {
+      yearBounds.minYear = Math.max(yearBounds.minYear, paperYear);
+    }
+    const { minYear, maxYear } = yearBounds;
+    addCitationsWithDedup(initialCitations, seenCitationKeys, allCitations, targetTotal);
+    pageState.count++;
+
+    if (allCitations.length >= targetTotal || task.stopRequested) {
+      return allCitations;
+    }
+
+    // Respect delay before continuing
+    await waitBetweenPages(pageState.count);
+
+    let currentYear = maxYear;
+    let oldestYearSeen = minYear;
+    let consecutiveEmptyYears = 0;
+    const yearStopLimit = paperYear || 1900;
+
+    while (!task.cancelled && !task.stopRequested && allCitations.length < targetTotal && currentYear >= yearStopLimit) {
+      const { yearHadResults } = await fetchCitationsForYear({
+        year: currentYear,
+        baseUrl: citedByUrl,
+        task,
+        targetTotal,
+        seenCitationKeys,
+        allCitations,
+        totalPagesEstimate,
+        pageState
+      });
+
+      if (!yearHadResults) {
+        consecutiveEmptyYears++;
+        if (consecutiveEmptyYears >= 3 && currentYear < oldestYearSeen - 1) {
+          log(`No results for ${consecutiveEmptyYears} consecutive years; stopping early at year ${currentYear}`);
           break;
         }
-        
-        // Deduplicate across pages/results by Scholar id/url/title-year
-        for (const citation of pageCitations) {
-          const keys = buildDedupKeys(citation);
-          const isDuplicate = keys.some(key => seenCitationKeys.has(key));
-          if (isDuplicate) {
-            continue;
-          }
-          keys.forEach(key => seenCitationKeys.add(key));
-          allCitations.push(citation);
-        }
-        
-        // Find next page
-        currentUrl = findNextPageLink(doc);
-        pageNum++;
-        
-        // Rate limiting delay
-        if (currentUrl) {
-          await randomSleep(CONFIG.minDelay, CONFIG.maxDelay);
-        }
-        
-      } catch (e) {
-        logError('Error fetching citations:', e);
-        throw e;
+      } else {
+        oldestYearSeen = Math.min(oldestYearSeen, currentYear);
+        consecutiveEmptyYears = 0;
+      }
+
+      if (allCitations.length >= targetTotal) {
+        break;
+      }
+
+      currentYear--;
+
+      if (!task.stopRequested && currentYear >= yearStopLimit) {
+        await waitBetweenPages(pageState.count);
       }
     }
     
     return allCitations;
+  }
+
+  async function fetchCitationsForYear({
+    year,
+    baseUrl,
+    task,
+    targetTotal,
+    seenCitationKeys,
+    allCitations,
+    totalPagesEstimate,
+    pageState
+  }) {
+    let start = 0;
+    let pageInYear = 0;
+    let added = 0;
+    let hasMore = true;
+    let yearHadResults = false;
+
+    while (!task.cancelled && !task.stopRequested && hasMore && allCitations.length < targetTotal) {
+      pageInYear++;
+      pageState.count++;
+      const pageLabel = `Year ${year} • Page ${pageInYear}`;
+      const progressPercent = Math.min(35, pageState.count * 2);
+
+      updateProgress(
+        `Fetching ${pageLabel}...`,
+        progressPercent,
+        `Collected ${allCitations.length} references`,
+        'Stage 1/3: Collecting from Google Scholar',
+        totalPagesEstimate ? `Page ${pageState.count}/${totalPagesEstimate}` : pageLabel,
+        retryCounter ? `Retries: ${retryCounter}` : ''
+      );
+
+      const pageUrl = buildScholarUrl(baseUrl, { start, as_ylo: year, as_yhi: year });
+      const html = await fetchScholarPage(pageUrl, task, {
+        text: `Retrying ${pageLabel}...`,
+        percent: progressPercent,
+        stage: 'Stage 1/3: Collecting from Google Scholar',
+        pageInfo: pageLabel
+      });
+
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const pageCitations = parseCitationsFromPage(doc);
+      log(`Year ${year} page ${pageInYear}: found ${pageCitations.length} citations`);
+
+      if (pageCitations.length === 0) {
+        throw new Error(`Year ${year} page ${pageInYear} 无法获取任何论文，抓取失败。`);
+      }
+
+      yearHadResults = true;
+      added += addCitationsWithDedup(pageCitations, seenCitationKeys, allCitations, targetTotal);
+
+      if (allCitations.length >= targetTotal) {
+        return { added, yearHadResults };
+      }
+
+      const nextPageExists = !!findNextPageLink(doc) && pageCitations.length === CONFIG.resultsPerPage;
+      start += CONFIG.resultsPerPage;
+
+      if (nextPageExists && !task.stopRequested) {
+        const delayMs = await waitBetweenPages(pageState.count);
+        updateProgress(
+          `Waiting ${formatDelaySeconds(delayMs)}s before next page...`,
+          progressPercent,
+          `Rate limiting pause`,
+          'Stage 1/3: Collecting from Google Scholar',
+          pageLabel,
+          retryCounter ? `Retries: ${retryCounter}` : ''
+        );
+      } else {
+        hasMore = false;
+      }
+    }
+
+    return { added, yearHadResults };
   }
 
   // ==================== Semantic Scholar API ====================
@@ -807,27 +1073,43 @@
       log('Export already in progress');
       return;
     }
+
+    await settingsReady;
+    await loadSettings();
+    retryCounter = 0;
+    const paperYear = getPaperYearFromEntry(paperEntry);
     
     // Find Cited by link
-    const citedByUrl = findCitedByLink(paperEntry);
-    if (!citedByUrl) {
+    const citedByInfo = findCitedByLink(paperEntry);
+    if (!citedByInfo) {
       showErrorModal('Could not find "Cited by" link for this paper. The paper may have no citations.');
       return;
     }
+    const citedByUrl = citedByInfo.href;
+    const expectedTotal = citedByInfo.count || null;
     
     const paperTitle = getPaperTitle(paperEntry);
     log('Starting export for:', paperTitle);
     log('Cited by URL:', citedByUrl);
+    if (expectedTotal) {
+      log(`Expected citation count: ${expectedTotal}`);
+    }
     
     isExporting = true;
-    currentExportTask = { cancelled: false };
+    currentExportTask = { cancelled: false, stopRequested: false };
     
     createProgressModal();
     
     try {
       // Stage 1: Fetch all citations from Google Scholar
-      updateProgress('Collecting citations from Google Scholar...', 5, '', 'Stage 1/3: Collecting from Google Scholar');
-      const citations = await fetchAllCitations(citedByUrl, currentExportTask);
+      updateProgress(
+        'Collecting citations from Google Scholar...',
+        5,
+        expectedTotal ? `Target: ${expectedTotal} citations` : '',
+        'Stage 1/3: Collecting from Google Scholar',
+        expectedTotal ? `Page 1/${Math.max(1, Math.ceil(expectedTotal / CONFIG.resultsPerPage))}` : ''
+      );
+      const citations = await fetchAllCitations(citedByUrl, currentExportTask, expectedTotal, paperYear);
       
       if (currentExportTask.cancelled) {
         log('Export cancelled by user');
@@ -841,25 +1123,36 @@
       
       log(`Collected ${citations.length} citations from Google Scholar`);
       
-      // Stage 2: Enrich with Semantic Scholar
-      updateProgress('Enriching with Semantic Scholar data...', 35, '', 'Stage 2/3: Enriching with Semantic Scholar');
-      await enrichWithSemanticScholar(citations, currentExportTask);
+      if (currentExportTask.stopRequested) {
+        log('Stop requested by user; exporting partial results.');
+      }
       
-      if (currentExportTask.cancelled) {
-        log('Export cancelled by user');
-        return;
+      // Stage 2: Enrich with Semantic Scholar (skip if user stopped early)
+      if (!currentExportTask.stopRequested && CONFIG.enableSemanticScholar) {
+        updateProgress('Enriching with Semantic Scholar data...', 35, '', 'Stage 2/3: Enriching with Semantic Scholar');
+        await enrichWithSemanticScholar(citations, currentExportTask);
+        
+        if (currentExportTask.cancelled) {
+          log('Export cancelled by user');
+          return;
+        }
+      } else if (!CONFIG.enableSemanticScholar) {
+        log('Semantic Scholar enrichment disabled via settings.');
+      } else {
+        log('Skipping enrichment due to user stop request.');
       }
       
       // Stage 3: Sort and export
-      updateProgress('Sorting and generating CSV...', 90, '', 'Stage 3/3: Generating Export');
-      const sortedCitations = sortByYear(citations);
-      const filename = downloadCSV(sortedCitations, paperTitle);
+      const exportMessage = currentExportTask.stopRequested ? 'Exporting partial results...' : 'Sorting and generating CSV...';
+      updateProgress(exportMessage, 90, '', 'Stage 3/3: Generating Export');
+      const finalCitations = CONFIG.autoSort ? sortByYear(citations) : citations;
+      const filename = downloadCSV(finalCitations, paperTitle);
       
       updateProgress('Complete!', 100, '', 'Done');
       
       // Show success
       setTimeout(() => {
-        showCompletionModal(sortedCitations.length, filename);
+        showCompletionModal(finalCitations.length, filename);
       }, 500);
       
     } catch (e) {
