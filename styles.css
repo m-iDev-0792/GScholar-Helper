@@ -329,6 +329,20 @@
   cursor: not-allowed;
 }
 
+.sre-btn-debug {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  font-size: 13px;
+}
+
+.sre-btn-debug:hover {
+  background: linear-gradient(135deg, #d97706, #b45309);
+}
+
+.sre-btn-debug:active {
+  transform: scale(0.98);
+}
+
 /* Additional button styles for future expansion */
 .sre-btn-icon {
   display: inline-flex;

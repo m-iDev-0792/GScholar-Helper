@@ -37,6 +37,10 @@
   let isExporting = false;
   let captchaWindow = null;
   let retryCounter = 0;
+  let debugInfo = {
+    failedResponses: [],
+    hasFailures: false
+  };
 
   // ==================== Settings Management ====================
 
@@ -135,14 +139,14 @@
     // Setup cancel handlers
     const cancelBtn = document.getElementById('sre-cancel-btn');
     const stopExportBtn = document.getElementById('sre-stop-export-btn');
-    
+
     const handleCancel = () => {
       if (currentExportTask) {
         currentExportTask.cancelled = true;
       }
       closeProgressModal();
     };
-    
+
     cancelBtn.addEventListener('click', handleCancel);
     stopExportBtn.addEventListener('click', () => {
       if (currentExportTask) {
@@ -151,7 +155,7 @@
       stopExportBtn.disabled = true;
       stopExportBtn.textContent = 'Stopping...';
     });
-    
+
     return overlay;
   }
 
@@ -163,7 +167,7 @@
     const progressStage = document.getElementById('sre-progress-stage');
     const progressPages = document.getElementById('sre-progress-pages');
     const progressRetries = document.getElementById('sre-progress-retries');
-    
+
     if (progressText) progressText.textContent = text;
     if (progressBar) progressBar.style.width = `${percent}%`;
     if (progressDetails) progressDetails.textContent = details;
@@ -223,11 +227,16 @@
   // Show error modal
   function showErrorModal(message) {
     closeProgressModal();
-    
+
     const overlay = document.createElement('div');
     overlay.className = 'sre-modal-overlay';
     overlay.id = 'sre-error-modal';
-    
+
+    // Show debug button if there are failures
+    const debugButtonHtml = debugInfo.hasFailures
+      ? `<button class="sre-btn sre-btn-debug" id="sre-error-debug-btn">Export Debug Data (${debugInfo.failedResponses.length} failures)</button>`
+      : '';
+
     overlay.innerHTML = `
       <div class="sre-modal sre-modal-error">
         <div class="sre-modal-header">
@@ -236,22 +245,31 @@
         </div>
         <div class="sre-modal-body">
           <p>${message}</p>
+          ${debugInfo.hasFailures ? '<p style="margin-top: 12px; font-size: 13px; color: #f59e0b;">Debug data is available. Click the button below to export the failed responses for analysis.</p>' : ''}
         </div>
         <div class="sre-modal-footer">
+          ${debugButtonHtml}
           <button class="sre-btn sre-btn-primary" id="sre-close-error-btn">Close</button>
         </div>
       </div>
     `;
-    
+
     document.body.appendChild(overlay);
-    
+
     const closeBtn = document.getElementById('sre-close-error');
     const closeErrorBtn = document.getElementById('sre-close-error-btn');
-    
+    const debugBtn = document.getElementById('sre-error-debug-btn');
+
     const handleClose = () => overlay.remove();
-    
+
     closeBtn.addEventListener('click', handleClose);
     closeErrorBtn.addEventListener('click', handleClose);
+
+    if (debugBtn) {
+      debugBtn.addEventListener('click', () => {
+        downloadDebugData();
+      });
+    }
   }
 
   // ==================== CAPTCHA Handling ====================
@@ -620,9 +638,10 @@
       url.searchParams.set(key, value);
     });
 
-    // Force 20 results per page and sort by year (newest first)
+    // Force 20 results per page
     url.searchParams.set('num', CONFIG.resultsPerPage);
-    url.searchParams.set('scisbd', 1);
+    // Note: Do NOT set scisbd=1, as that filters to only recent articles
+    // The extension handles year filtering with as_ylo/as_yhi parameters
 
     return url.toString();
   }
@@ -778,7 +797,19 @@
     const firstDoc = new DOMParser().parseFromString(firstHtml, 'text/html');
     const initialCitations = parseCitationsFromPage(firstDoc);
     if (initialCitations.length === 0) {
-      throw new Error('未能从第一页获取任何论文，可能被限流或页面结构变化。');
+      // Capture failed first page response for debugging
+      debugInfo.failedResponses.push({
+        timestamp: new Date().toISOString(),
+        year: 'initial',
+        page: 1,
+        url: firstUrl,
+        html: firstHtml,
+        reason: 'First page returned no citations'
+      });
+      debugInfo.hasFailures = true;
+
+      logError('First page returned no citations - possible rate limiting or page structure change');
+      throw new Error('Failed to get any citations from the first page. This could mean: (1) The paper has no citations, (2) Google Scholar is rate limiting, or (3) Page structure has changed.');
     }
     const yearBounds = deriveYearBounds(initialCitations);
     if (paperYear) {
@@ -816,6 +847,14 @@
         consecutiveEmptyYears++;
         if (consecutiveEmptyYears >= 3 && currentYear < oldestYearSeen - 1) {
           log(`No results for ${consecutiveEmptyYears} consecutive years; stopping early at year ${currentYear}`);
+          updateProgress(
+            `Stopping early - ${consecutiveEmptyYears} consecutive empty years`,
+            Math.min(35, pageState.count * 2),
+            `Collected ${allCitations.length} references total`,
+            'Stage 1/3: Collecting from Google Scholar',
+            `Stopped at year ${currentYear}`,
+            ''
+          );
           break;
         }
       } else {
@@ -881,7 +920,44 @@
       log(`Year ${year} page ${pageInYear}: found ${pageCitations.length} citations`);
 
       if (pageCitations.length === 0) {
-        throw new Error(`Year ${year} page ${pageInYear} 无法获取任何论文，抓取失败。`);
+        // Capture failed response for debugging
+        debugInfo.failedResponses.push({
+          timestamp: new Date().toISOString(),
+          year: year,
+          page: pageInYear,
+          url: pageUrl,
+          html: html,
+          reason: pageInYear === 1 ? 'No results for year' : 'Possible rate limiting'
+        });
+        debugInfo.hasFailures = true;
+
+        // No papers found for this year/page
+        if (pageInYear === 1) {
+          // First page of the year has no results - this is normal, skip this year
+          log(`Year ${year}: No papers found, skipping year`);
+          updateProgress(
+            `Year ${year}: No papers found`,
+            progressPercent,
+            `Collected ${allCitations.length} references (skipping year ${year})`,
+            'Stage 1/3: Collecting from Google Scholar',
+            `Year ${year} - No results`,
+            retryCounter ? `Retries: ${retryCounter}` : ''
+          );
+          return { added, yearHadResults: false };
+        } else {
+          // Subsequent page has no results - possible rate limiting
+          logError(`Year ${year} page ${pageInYear}: No papers returned (possible rate limiting)`);
+          updateProgress(
+            `Year ${year}: No papers on page ${pageInYear}`,
+            progressPercent,
+            `Possible rate limiting detected - collected ${allCitations.length} references so far`,
+            'Stage 1/3: Collecting from Google Scholar',
+            `Year ${year} - Page ${pageInYear} blocked`,
+            retryCounter ? `Retries: ${retryCounter}` : ''
+          );
+          // Stop pagination for this year but don't crash
+          return { added, yearHadResults };
+        }
       }
 
       yearHadResults = true;
@@ -1066,6 +1142,58 @@
     return filename;
   }
 
+  // Download debug data for failed requests
+  function downloadDebugData() {
+    if (!debugInfo.hasFailures || debugInfo.failedResponses.length === 0) {
+      alert('No debug data available');
+      return;
+    }
+
+    // Create debug report
+    const debugReport = {
+      exportTime: new Date().toISOString(),
+      totalFailedRequests: debugInfo.failedResponses.length,
+      failedRequests: debugInfo.failedResponses.map((failure, index) => ({
+        index: index + 1,
+        timestamp: failure.timestamp,
+        year: failure.year,
+        page: failure.page,
+        url: failure.url,
+        reason: failure.reason,
+        htmlLength: failure.html.length,
+        htmlPreview: failure.html.substring(0, 500) + '...'
+      })),
+      fullResponses: debugInfo.failedResponses.map((failure, index) => ({
+        index: index + 1,
+        timestamp: failure.timestamp,
+        year: failure.year,
+        page: failure.page,
+        url: failure.url,
+        reason: failure.reason,
+        fullHTML: failure.html
+      }))
+    };
+
+    // Create JSON blob
+    const jsonContent = JSON.stringify(debugReport, null, 2);
+    const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+
+    const filename = `scholar_debug_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+
+    // Use downloads API via background script
+    chrome.runtime.sendMessage({
+      action: 'download',
+      url: url,
+      filename: filename
+    }, (response) => {
+      URL.revokeObjectURL(url);
+      log(`Debug data exported: ${filename}`);
+    });
+
+    return filename;
+  }
+
   // ==================== Main Export Handler ====================
 
   async function handleExportClick(paperEntry, button) {
@@ -1097,7 +1225,13 @@
     
     isExporting = true;
     currentExportTask = { cancelled: false, stopRequested: false };
-    
+
+    // Reset debug info for new export
+    debugInfo = {
+      failedResponses: [],
+      hasFailures: false
+    };
+
     createProgressModal();
     
     try {
