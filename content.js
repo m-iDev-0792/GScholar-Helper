@@ -229,7 +229,7 @@
             <p>A new tab will open where you can complete the CAPTCHA. After solving it, click "I've Completed Verification" to continue.</p>
             <div class="sre-captcha-instructions">
               <ol>
-                <li>Click "Open Verification Page" below</li>
+                <li>Click "Open Verification" below</li>
                 <li>Complete the CAPTCHA in the new tab</li>
                 <li>Return here and click "I've Completed Verification"</li>
               </ol>
@@ -240,13 +240,13 @@
           </div>
           <div class="sre-modal-footer sre-modal-footer-captcha">
             <button class="sre-btn sre-btn-primary" id="sre-open-captcha-btn">
-              🔗 Open Verification Page
+              🔗 Open Verification
             </button>
             <button class="sre-btn sre-btn-success" id="sre-captcha-done-btn" disabled>
-              ✓ I've Completed Verification
+              ✓ I've Completed
             </button>
             <button class="sre-btn sre-btn-secondary" id="sre-captcha-cancel-btn">
-              Cancel Export
+              Cancel
             </button>
           </div>
         </div>
@@ -396,8 +396,15 @@
       pdfUrl: '',
       abstract: '',
       scholarUrl: '',
+      scholarId: '',
       rawMeta: ''
     };
+    
+    // Scholar result id is the most reliable dedupe key
+    const cid = entryEl.getAttribute('data-cid');
+    if (cid) {
+      result.scholarId = cid;
+    }
     
     // Title
     const titleEl = entryEl.querySelector('.gs_rt a');
@@ -472,6 +479,43 @@
     return citations;
   }
 
+  // Normalize Scholar URL to a stable form for deduping
+  function normalizeScholarUrl(url) {
+    if (!url) return '';
+    try {
+      const u = new URL(url);
+      // Drop volatile params that can change per request
+      ['oi', 'q', 'hl', 'as_ylo', 'as_yhi', 'scioq', 'cites', 'scipsc'].forEach(p => u.searchParams.delete(p));
+      return `${u.origin}${u.pathname}${u.searchParams.toString() ? `?${u.searchParams.toString()}` : ''}`;
+    } catch (e) {
+      return url;
+    }
+  }
+
+  // Generate keys used to detect duplicate citations
+  function buildDedupKeys(citation) {
+    const keys = [];
+    
+    if (citation.scholarId) {
+      keys.push(`id:${citation.scholarId}`);
+    }
+    
+    const normUrl = normalizeScholarUrl(citation.scholarUrl);
+    if (normUrl) {
+      keys.push(`url:${normUrl}`);
+    }
+    
+    if (citation.title) {
+      const titleKey = normalizeTitle(citation.title);
+      const yearKey = citation.year ? `|${citation.year}` : '';
+      if (titleKey) {
+        keys.push(`title:${titleKey}${yearKey}`);
+      }
+    }
+    
+    return keys;
+  }
+
   // Find the next page link
   function findNextPageLink(doc) {
     // Look for "Next" button
@@ -508,6 +552,7 @@
     let pageNum = 1;
     let retryCount = 0;
     const maxRetries = 3;
+    const seenCitationKeys = new Set();
     
     while (currentUrl && !task.cancelled) {
       // Check max limit
@@ -572,7 +617,16 @@
           break;
         }
         
-        allCitations.push(...pageCitations);
+        // Deduplicate across pages/results by Scholar id/url/title-year
+        for (const citation of pageCitations) {
+          const keys = buildDedupKeys(citation);
+          const isDuplicate = keys.some(key => seenCitationKeys.has(key));
+          if (isDuplicate) {
+            continue;
+          }
+          keys.forEach(key => seenCitationKeys.add(key));
+          allCitations.push(citation);
+        }
         
         // Find next page
         currentUrl = findNextPageLink(doc);
