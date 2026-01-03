@@ -818,68 +818,23 @@
     const totalPagesEstimate = expectedTotal ? Math.max(1, Math.ceil(expectedTotal / CONFIG.resultsPerPage)) : null;
     const pageState = { count: 0 };
 
-    // Initial page (unfiltered) to detect year range quickly
-    const firstUrl = buildScholarUrl(citedByUrl, { start: 0 });
-    const firstPageLabel = totalPagesEstimate ? `Page 1/${totalPagesEstimate}` : 'Page 1';
-    updateProgress(
-      'Fetching first page...',
-      5,
-      expectedTotal ? `Target: ${targetTotal} citations` : '',
-      'Stage 1/3: Collecting from Google Scholar',
-      firstPageLabel,
-      retryCounter ? `Retries: ${retryCounter}` : ''
-    );
-
-    const firstHtml = await fetchScholarPage(firstUrl, task, {
-      text: 'Retrying first page...',
-      percent: 5,
-      stage: 'Stage 1/3: Collecting from Google Scholar',
-      pageInfo: firstPageLabel
-    });
-    const firstDoc = new DOMParser().parseFromString(firstHtml, 'text/html');
-    const initialCitations = parseCitationsFromPage(firstDoc);
-    if (initialCitations.length === 0) {
-      // Capture failed first page response for debugging
-      debugInfo.failedResponses.push({
-        timestamp: new Date().toISOString(),
-        year: 'initial',
-        page: 1,
-        url: firstUrl,
-        html: firstHtml,
-        reason: 'First page returned no citations'
-      });
-      debugInfo.hasFailures = true;
-
-      logError('First page returned no citations - possible rate limiting or page structure change');
-      throw new Error('Failed to get any citations from the first page. This could mean: (1) The paper has no citations, (2) Google Scholar is rate limiting, or (3) Page structure has changed.');
-    }
-    const yearBounds = deriveYearBounds(initialCitations);
-    if (paperYear) {
-      yearBounds.minYear = Math.max(yearBounds.minYear, paperYear);
-    }
-    const { minYear, maxYear } = yearBounds;
-    addCitationsWithDedup(initialCitations, seenCitationKeys, allCitations, targetTotal);
-    pageState.count++;
-
+    // Determine correct year bounds
+    const currentYear = new Date().getFullYear();
     const yearStopLimit = paperYear || 1900;
+    const maxYear = currentYear;
+    const minYear = yearStopLimit;
 
-    addDebugLog(`First page: Found ${initialCitations.length} papers, year range ${minYear}-${maxYear}`);
-    addDebugLog(`Starting year-by-year extraction from ${maxYear} to ${yearStopLimit}`);
+    addDebugLog(`Year range: ${minYear} (paper year) to ${maxYear} (current year)`);
+    addDebugLog(`Starting year-by-year extraction from ${maxYear} down to ${minYear}`);
 
-    if (allCitations.length >= targetTotal || task.stopRequested) {
-      return allCitations;
-    }
-
-    // Respect delay before continuing
-    await waitBetweenPages(pageState.count);
-
-    let currentYear = maxYear;
-    let oldestYearSeen = minYear;
+    // Start from current year and go backwards to paper year
+    let processingYear = maxYear;
+    let oldestYearSeen = maxYear;
     let consecutiveEmptyYears = 0;
 
-    while (!task.cancelled && !task.stopRequested && allCitations.length < targetTotal && currentYear >= yearStopLimit) {
+    while (!task.cancelled && !task.stopRequested && allCitations.length < targetTotal && processingYear >= yearStopLimit) {
       const { yearHadResults } = await fetchCitationsForYear({
-        year: currentYear,
+        year: processingYear,
         baseUrl: citedByUrl,
         task,
         targetTotal,
@@ -891,20 +846,20 @@
 
       if (!yearHadResults) {
         consecutiveEmptyYears++;
-        if (consecutiveEmptyYears >= 3 && currentYear < oldestYearSeen - 1) {
-          log(`No results for ${consecutiveEmptyYears} consecutive years; stopping early at year ${currentYear}`);
+        if (consecutiveEmptyYears >= 3 && processingYear < oldestYearSeen - 1) {
+          log(`No results for ${consecutiveEmptyYears} consecutive years; stopping early at year ${processingYear}`);
           updateProgress(
             `Stopping early - ${consecutiveEmptyYears} consecutive empty years`,
             Math.min(35, pageState.count * 2),
             `Collected ${allCitations.length} references total`,
             'Stage 1/3: Collecting from Google Scholar',
-            `Stopped at year ${currentYear}`,
+            `Stopped at year ${processingYear}`,
             ''
           );
           break;
         }
       } else {
-        oldestYearSeen = Math.min(oldestYearSeen, currentYear);
+        oldestYearSeen = Math.min(oldestYearSeen, processingYear);
         consecutiveEmptyYears = 0;
       }
 
@@ -912,9 +867,9 @@
         break;
       }
 
-      currentYear--;
+      processingYear--;
 
-      if (!task.stopRequested && currentYear >= yearStopLimit) {
+      if (!task.stopRequested && processingYear >= yearStopLimit) {
         await waitBetweenPages(pageState.count);
       }
     }
@@ -966,6 +921,10 @@
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const pageCitations = parseCitationsFromPage(doc);
       log(`Year ${year} page ${pageInYear}: found ${pageCitations.length} citations`);
+
+      if (pageCitations.length > CONFIG.resultsPerPage) {
+        addDebugLog(`  Note: Google returned ${pageCitations.length} papers (requested ${CONFIG.resultsPerPage})`, 'warn');
+      }
 
       if (pageCitations.length === 0) {
         // Capture failed response for debugging
@@ -1025,8 +984,16 @@
         return { added, yearHadResults };
       }
 
-      const nextPageExists = !!findNextPageLink(doc) && pageCitations.length === CONFIG.resultsPerPage;
+      // Check if next page exists - don't rely on exact count as Scholar may return different amounts
+      const nextPageLink = findNextPageLink(doc);
+      const nextPageExists = !!nextPageLink;
       start += CONFIG.resultsPerPage;
+
+      if (nextPageExists && !task.stopRequested) {
+        addDebugLog(`  Next page available, continuing...`);
+      } else if (!nextPageLink) {
+        addDebugLog(`  No next page link found, year ${year} complete`);
+      }
 
       if (nextPageExists && !task.stopRequested) {
         const delayMs = await waitBetweenPages(pageState.count);
