@@ -27,6 +27,7 @@
     cooldownSeconds: 15,
     yearRetryAttempts: 0,
     enableSemanticScholar: true,
+    semanticScholarApiKey: '',
     autoSort: true,
     exportDebugData: false
   };
@@ -1092,19 +1093,31 @@
   // ==================== Semantic Scholar API ====================
 
   // Search for a paper in Semantic Scholar
-  async function searchSemanticScholar(title, year) {
+  async function searchSemanticScholar(title, year, retryCount = 0) {
     const query = encodeURIComponent(title);
     const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${query}&limit=5&fields=paperId,title,year,authors,venue,abstract,openAccessPdf`;
-    
+
+    const headers = {};
+    if (CONFIG.semanticScholarApiKey) {
+      headers['x-api-key'] = CONFIG.semanticScholarApiKey;
+    }
+
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers });
+
       if (!response.ok) {
         if (response.status === 429) {
-          // Rate limited, wait and retry once
-          await sleep(1000);
-          const retryResponse = await fetch(url);
-          if (!retryResponse.ok) return null;
-          return await retryResponse.json();
+          // Rate limited
+          if (retryCount < 2) {
+            // Retry up to 2 times with exponential backoff
+            const waitTime = CONFIG.semanticScholarApiKey ? 2000 : (retryCount + 1) * 3000;
+            addDebugLog(`  Rate limited, waiting ${waitTime}ms before retry ${retryCount + 1}/2`, 'warn');
+            await sleep(waitTime);
+            return await searchSemanticScholar(title, year, retryCount + 1);
+          } else {
+            addDebugLog(`  Rate limit: Max retries reached for "${title.substring(0, 40)}..."`, 'error');
+            return null;
+          }
         }
         return null;
       }
@@ -1154,20 +1167,42 @@
     let processed = 0;
     let matchedCount = 0;
     let abstractEnrichedCount = 0;
+    let rateLimitCount = 0;
+
+    // Determine API rate based on whether we have an API key
+    const hasApiKey = CONFIG.semanticScholarApiKey && CONFIG.semanticScholarApiKey.length > 0;
+    const apiDelay = hasApiKey ? 1000 : CONFIG.semanticScholarDelay; // 1 req/sec with key, 200ms without
+    const apiStatus = hasApiKey
+      ? 'With API key: 1 req/sec'
+      : 'Without API key: 100 req/5min';
+
+    addDebugLog(`Semantic Scholar API: ${apiStatus}`, 'info');
 
     for (const citation of citations) {
       if (task.cancelled) break;
 
       processed++;
+      const rateInfo = hasApiKey
+        ? `1 req/sec (${processed}/${total})`
+        : `5 req/min (${processed}/${total})`;
+
       updateProgress(
         `Enriching metadata (${processed}/${total})...`,
         30 + Math.floor((processed / total) * 50),
         `Processing: ${citation.title.substring(0, 50)}...`,
-        'Stage 2/3: Enriching with Semantic Scholar'
+        `Stage 2/3: Semantic Scholar - ${apiStatus}`,
+        rateInfo,
+        rateLimitCount > 0 ? `Rate limits: ${rateLimitCount}` : ''
       );
       
       try {
         const ssResults = await searchSemanticScholar(citation.title, citation.year);
+
+        // Track if we hit rate limiting (indicated by null result after retries)
+        if (ssResults === null) {
+          rateLimitCount++;
+        }
+
         const match = findBestMatch(citation, ssResults);
         
         if (match) {
@@ -1214,10 +1249,10 @@
             addDebugLog(`  ✓ Enriched "${citation.title.substring(0, 50)}...": ${enrichedFields.join(', ')}`, 'success');
           }
         }
-        
-        // Rate limiting for Semantic Scholar
-        await sleep(CONFIG.semanticScholarDelay);
-        
+
+        // Rate limiting for Semantic Scholar (use appropriate delay based on API key)
+        await sleep(apiDelay);
+
       } catch (e) {
         logError('Error enriching citation:', e);
         // Continue with other citations
@@ -1225,7 +1260,8 @@
     }
 
     // Log summary
-    addDebugLog(`Semantic Scholar enrichment complete: ${matchedCount}/${total} papers matched, ${abstractEnrichedCount} abstracts enriched`, 'success');
+    const rateLimitMsg = rateLimitCount > 0 ? `, ${rateLimitCount} rate-limited` : '';
+    addDebugLog(`Semantic Scholar enrichment complete: ${matchedCount}/${total} papers matched, ${abstractEnrichedCount} abstracts enriched${rateLimitMsg}`, rateLimitCount > 0 ? 'warn' : 'success');
 
     return citations;
   }

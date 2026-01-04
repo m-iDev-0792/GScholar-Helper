@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     cooldownSeconds: 15,
     yearRetryAttempts: 0,
     enableSemanticScholar: true,
+    semanticScholarApiKey: '',
     autoSort: true,
     exportDebugData: false
   });
@@ -22,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('cooldownSeconds').value = settings.cooldownSeconds;
   document.getElementById('yearRetryAttempts').value = settings.yearRetryAttempts;
   document.getElementById('enableSemanticScholar').checked = settings.enableSemanticScholar;
+  document.getElementById('semanticScholarApiKey').value = settings.semanticScholarApiKey;
   document.getElementById('autoSort').checked = settings.autoSort;
   document.getElementById('exportDebugData').checked = settings.exportDebugData;
   
@@ -51,6 +53,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       cooldownSeconds: parseInt(document.getElementById('cooldownSeconds').value, 10),
       yearRetryAttempts: parseInt(document.getElementById('yearRetryAttempts').value, 10),
       enableSemanticScholar: document.getElementById('enableSemanticScholar').checked,
+      semanticScholarApiKey: document.getElementById('semanticScholarApiKey').value.trim(),
       autoSort: document.getElementById('autoSort').checked,
       exportDebugData: document.getElementById('exportDebugData').checked
     };

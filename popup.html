@@ -134,7 +134,33 @@
       outline: none;
       border-color: #4285f4;
     }
-    
+
+    /* Text Input */
+    .text-input {
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: monospace;
+    }
+
+    .text-input:focus {
+      outline: none;
+      border-color: #4285f4;
+    }
+
+    .text-input::placeholder {
+      color: #999;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    }
+
+    .setting-row-full {
+      display: flex;
+      flex-direction: row;
+      gap: 12px;
+      align-items: center;
+    }
+
     .range-inputs {
       display: flex;
       align-items: center;
@@ -314,7 +340,15 @@
           <span class="toggle-slider"></span>
         </label>
       </div>
-      
+
+      <div class="setting-row setting-row-full">
+        <div style="flex: 1;">
+          <div class="setting-label">Semantic Scholar API Key</div>
+          <div class="setting-description">Optional: 1 req/sec with key, 100 req/5min without</div>
+        </div>
+        <input type="text" class="text-input" id="semanticScholarApiKey" placeholder="Optional API key" style="flex: 1; max-width: 200px;">
+      </div>
+
       <div class="setting-row">
         <div>
           <div class="setting-label">Auto Sort</div>
