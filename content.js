@@ -1477,7 +1477,7 @@
       
     } catch (e) {
       logError('Export error:', e);
-      showErrorModal(`Export failed: ${e.message}`);
+      showErrorModal(`Export failed: ${e.message}\nYou can try to reload the extension and refresh the page, then try again!`);
     }
   }
 
