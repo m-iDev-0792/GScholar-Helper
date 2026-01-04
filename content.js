@@ -1152,10 +1152,12 @@
   async function enrichWithSemanticScholar(citations, task) {
     const total = citations.length;
     let processed = 0;
-    
+    let matchedCount = 0;
+    let abstractEnrichedCount = 0;
+
     for (const citation of citations) {
       if (task.cancelled) break;
-      
+
       processed++;
       updateProgress(
         `Enriching metadata (${processed}/${total})...`,
@@ -1169,24 +1171,48 @@
         const match = findBestMatch(citation, ssResults);
         
         if (match) {
+          matchedCount++;
           // Update with better data from Semantic Scholar
+          let enrichedFields = [];
+
           if (match.authors && match.authors.length > 0) {
             citation.authors = match.authors.map(a => a.name).join('; ');
+            enrichedFields.push('authors');
           }
           if (match.venue) {
             citation.venue = match.venue;
+            enrichedFields.push('venue');
           }
           if (match.year) {
             citation.year = match.year;
+            enrichedFields.push('year');
           }
-          if (match.abstract && (!citation.abstract || citation.abstract.length < match.abstract.length)) {
-            citation.abstract = match.abstract;
+          if (match.abstract) {
+            const hadAbstract = citation.abstract && citation.abstract.length > 0;
+            const gsSnippetLength = citation.abstract ? citation.abstract.length : 0;
+            const ssAbstractLength = match.abstract.length;
+
+            // Always prefer Semantic Scholar abstract if available
+            if (!hadAbstract || ssAbstractLength > gsSnippetLength) {
+              citation.abstract = match.abstract;
+              abstractEnrichedCount++;
+              if (hadAbstract) {
+                enrichedFields.push(`abstract (${gsSnippetLength}→${ssAbstractLength} chars)`);
+              } else {
+                enrichedFields.push(`abstract (${ssAbstractLength} chars)`);
+              }
+            }
           }
           if (match.openAccessPdf && match.openAccessPdf.url) {
             citation.pdfUrl = match.openAccessPdf.url;
+            enrichedFields.push('PDF');
           }
-          
+
           citation.semanticScholarId = match.paperId;
+
+          if (enrichedFields.length > 0) {
+            addDebugLog(`  ✓ Enriched "${citation.title.substring(0, 50)}...": ${enrichedFields.join(', ')}`, 'success');
+          }
         }
         
         // Rate limiting for Semantic Scholar
@@ -1197,7 +1223,10 @@
         // Continue with other citations
       }
     }
-    
+
+    // Log summary
+    addDebugLog(`Semantic Scholar enrichment complete: ${matchedCount}/${total} papers matched, ${abstractEnrichedCount} abstracts enriched`, 'success');
+
     return citations;
   }
 
