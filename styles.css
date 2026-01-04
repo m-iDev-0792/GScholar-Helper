@@ -96,6 +96,10 @@
   max-width: 640px;
 }
 
+.sre-modal-progress {
+  max-width: 800px;
+}
+
 @keyframes sre-modalSlideIn {
   from {
     opacity: 0;

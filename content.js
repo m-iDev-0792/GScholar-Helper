@@ -111,7 +111,7 @@
     overlay.id = 'sre-progress-modal';
     
     overlay.innerHTML = `
-      <div class="sre-modal">
+      <div class="sre-modal sre-modal-progress">
         <div class="sre-modal-header">
           <h3>Exporting References</h3>
           <button class="sre-modal-close" id="sre-cancel-btn">✕</button>
@@ -783,8 +783,26 @@
     let added = 0;
     for (const citation of citations) {
       const keys = buildDedupKeys(citation);
-      const isDuplicate = keys.some(key => seenCitationKeys.has(key));
-      if (isDuplicate) continue;
+      const matchingKey = keys.find(key => seenCitationKeys.has(key));
+
+      if (matchingKey) {
+        // Log the duplicate with details
+        const title = citation.title || 'Unknown Title';
+        const year = citation.year ? ` (${citation.year})` : '';
+        let reason = '';
+
+        if (matchingKey.startsWith('id:')) {
+          reason = 'Scholar ID';
+        } else if (matchingKey.startsWith('url:')) {
+          reason = 'URL';
+        } else if (matchingKey.startsWith('title:')) {
+          reason = 'Title+Year';
+        }
+
+        addDebugLog(`  ✕ Duplicate: "${title}"${year} - Reason: ${reason}`, 'warn');
+        continue;
+      }
+
       keys.forEach(key => seenCitationKeys.add(key));
       targetList.push(citation);
       added++;
