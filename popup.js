@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     minDelaySeconds: 3,
     maxDelaySeconds: 8,
     cooldownSeconds: 15,
+    yearRetryAttempts: 0,
     enableSemanticScholar: true,
     autoSort: true,
     exportDebugData: false
@@ -19,6 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('minDelaySeconds').value = settings.minDelaySeconds;
   document.getElementById('maxDelaySeconds').value = settings.maxDelaySeconds;
   document.getElementById('cooldownSeconds').value = settings.cooldownSeconds;
+  document.getElementById('yearRetryAttempts').value = settings.yearRetryAttempts;
   document.getElementById('enableSemanticScholar').checked = settings.enableSemanticScholar;
   document.getElementById('autoSort').checked = settings.autoSort;
   document.getElementById('exportDebugData').checked = settings.exportDebugData;
@@ -47,11 +49,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       minDelaySeconds: parseInt(document.getElementById('minDelaySeconds').value, 10),
       maxDelaySeconds: parseInt(document.getElementById('maxDelaySeconds').value, 10),
       cooldownSeconds: parseInt(document.getElementById('cooldownSeconds').value, 10),
+      yearRetryAttempts: parseInt(document.getElementById('yearRetryAttempts').value, 10),
       enableSemanticScholar: document.getElementById('enableSemanticScholar').checked,
       autoSort: document.getElementById('autoSort').checked,
       exportDebugData: document.getElementById('exportDebugData').checked
     };
-    
+
     // Validate
     if (newSettings.maxReferences < 10) newSettings.maxReferences = 10;
     if (newSettings.maxReferences > 5000) newSettings.maxReferences = 5000;
@@ -60,15 +63,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       newSettings.maxDelaySeconds = newSettings.minDelaySeconds;
     }
     if (newSettings.cooldownSeconds < 15) newSettings.cooldownSeconds = 15;
+    if (newSettings.yearRetryAttempts < 0) newSettings.yearRetryAttempts = 0;
+    if (newSettings.yearRetryAttempts > 5) newSettings.yearRetryAttempts = 5;
     
     // Save
     await chrome.storage.sync.set(newSettings);
-    
+
     // Update UI to reflect saved value
     document.getElementById('maxReferences').value = newSettings.maxReferences;
     document.getElementById('minDelaySeconds').value = newSettings.minDelaySeconds;
     document.getElementById('maxDelaySeconds').value = newSettings.maxDelaySeconds;
     document.getElementById('cooldownSeconds').value = newSettings.cooldownSeconds;
+    document.getElementById('yearRetryAttempts').value = newSettings.yearRetryAttempts;
     
     // Show saved feedback
     saveBtn.textContent = '✓ Saved!';

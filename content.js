@@ -25,6 +25,7 @@
     minDelaySeconds: 3,
     maxDelaySeconds: 8,
     cooldownSeconds: 15,
+    yearRetryAttempts: 0,
     enableSemanticScholar: true,
     autoSort: true,
     exportDebugData: false
@@ -903,6 +904,7 @@
     let added = 0;
     let hasMore = true;
     let yearHadResults = false;
+    let pageRetryCount = 0;
 
     while (!task.cancelled && !task.stopRequested && hasMore && allCitations.length < targetTotal) {
       pageInYear++;
@@ -939,49 +941,83 @@
       if (pageCitations.length === 0) {
         // Capture failed response for debugging (only if enabled)
         if (CONFIG.exportDebugData) {
+          const reason = pageInYear === 1
+            ? `No results for year on page ${pageInYear} (retry ${pageRetryCount}/${CONFIG.yearRetryAttempts})`
+            : `No results on page ${pageInYear} (retry ${pageRetryCount}/${CONFIG.yearRetryAttempts})`;
+
           debugInfo.failedResponses.push({
             timestamp: new Date().toISOString(),
             year: year,
             page: pageInYear,
+            retryAttempt: pageRetryCount,
+            maxRetries: CONFIG.yearRetryAttempts,
             url: pageUrl,
             html: html,
-            reason: pageInYear === 1 ? 'No results for year' : 'Possible rate limiting'
+            reason: reason
           });
           debugInfo.hasFailures = true;
         }
 
-        // No papers found for this year/page
-        if (pageInYear === 1) {
-          // First page of the year has no results - this is normal, skip this year
-          log(`Year ${year}: No papers found, skipping year`);
-          addDebugLog(`Year ${year}: No papers found, skipping year`, 'warn');
+        // No papers found for this year/page - retry if attempts remaining
+        if (pageRetryCount < CONFIG.yearRetryAttempts) {
+          pageRetryCount++;
+          const pageDesc = pageInYear === 1 ? `Year ${year}` : `Year ${year} page ${pageInYear}`;
+          log(`${pageDesc}: No papers found, retrying (attempt ${pageRetryCount}/${CONFIG.yearRetryAttempts})`);
+          addDebugLog(`${pageDesc}: No papers found, retrying (${pageRetryCount}/${CONFIG.yearRetryAttempts})`, 'warn');
+
           updateProgress(
-            `Year ${year}: No papers found`,
+            `${pageDesc}: Retrying after cooldown (${pageRetryCount}/${CONFIG.yearRetryAttempts})`,
             progressPercent,
-            `Collected ${allCitations.length} unique references (skipping year ${year})`,
+            `Collected ${allCitations.length} unique references`,
             'Stage 1/3: Collecting from Google Scholar',
             yearProgress,
-            retryCounter ? `Retries: ${retryCounter}` : ''
+            `Retry ${pageRetryCount}/${CONFIG.yearRetryAttempts}`
           );
-          return { added, yearHadResults: false };
+
+          // Wait cooldown before retry
+          await sleep(CONFIG.cooldownMs);
+
+          // Reset to retry the same page
+          pageInYear--;
+          pageState.count--;
+          continue; // Retry the while loop
         } else {
-          // Subsequent page has no results - possible rate limiting
-          logError(`Year ${year} page ${pageInYear}: No papers returned (possible rate limiting)`);
-          addDebugLog(`Year ${year} page ${pageInYear}: No papers (rate limit?)`, 'error');
-          updateProgress(
-            `Year ${year}: No papers on page ${pageInYear}`,
-            progressPercent,
-            `Possible rate limiting - collected ${allCitations.length} unique references so far`,
-            'Stage 1/3: Collecting from Google Scholar',
-            yearProgress,
-            retryCounter ? `Retries: ${retryCounter}` : ''
-          );
-          // Stop pagination for this year but don't crash
-          return { added, yearHadResults };
+          // Out of retries
+          if (pageInYear === 1) {
+            // First page failed - skip entire year
+            log(`Year ${year}: No papers found after ${pageRetryCount} retries, skipping year`);
+            addDebugLog(`Year ${year}: No papers found after ${pageRetryCount} retries, skipping year`, 'error');
+            updateProgress(
+              `Year ${year}: No papers found (${pageRetryCount} retries)`,
+              progressPercent,
+              `Collected ${allCitations.length} unique references (skipping year ${year})`,
+              'Stage 1/3: Collecting from Google Scholar',
+              yearProgress,
+              retryCounter ? `Retries: ${retryCounter}` : ''
+            );
+            return { added, yearHadResults: false };
+          } else {
+            // Subsequent page failed - stop pagination for this year
+            logError(`Year ${year} page ${pageInYear}: No papers returned after ${pageRetryCount} retries`);
+            addDebugLog(`Year ${year} page ${pageInYear}: No papers after ${pageRetryCount} retries`, 'error');
+            updateProgress(
+              `Year ${year}: Page ${pageInYear} failed (${pageRetryCount} retries)`,
+              progressPercent,
+              `Collected ${allCitations.length} unique references so far`,
+              'Stage 1/3: Collecting from Google Scholar',
+              yearProgress,
+              retryCounter ? `Retries: ${retryCounter}` : ''
+            );
+            // Stop pagination for this year but keep what we got
+            return { added, yearHadResults };
+          }
         }
       }
 
+      // Successfully got results - reset retry counter for next page
       yearHadResults = true;
+      pageRetryCount = 0;
+
       const beforeCount = allCitations.length;
       added += addCitationsWithDedup(pageCitations, seenCitationKeys, allCitations, targetTotal);
       const afterCount = allCitations.length;
